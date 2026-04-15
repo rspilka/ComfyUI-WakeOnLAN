@@ -38,12 +38,14 @@ class WakeOnLanNode:
     def get_ip_from_mac(self, target_mac):
         clean_target = target_mac.replace(":", "-").lower()
         try:
+            # Trigger ARP update via UDP broadcast
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.sendto(b"", ("255.255.255.255", 9))
             sock.close()
             time.sleep(0.5)
             
+            # Read system ARP table
             output = subprocess.check_output(["arp", "-a"]).decode("ascii", errors="ignore")
             for line in output.splitlines():
                 if clean_target in line.replace(":", "-").lower():
@@ -55,16 +57,17 @@ class WakeOnLanNode:
     def execute_wol(self, mac_addresses, mode, resolve_ips, check_online, ip_for_ping, timeout_seconds, advanced_settings="disabled", reset_cache="no"):
         if advanced_settings == "enabled" and reset_cache == "yes_clear_now":
             WakeOnLanNode._executed_macs.clear()
+            print("WOL Node: Session cache cleared.")
 
         mac_list = [m.strip() for m in mac_addresses.replace('\n', ',').replace(';', ',').split(',') if m.strip()]
         wol_results = []
         ip_results = []
         
-        # 1. WOL & Status Generation
+        # 1. WOL Logic
         for mac in mac_list:
             clean_mac = mac.replace(":", "").replace("-", "").replace(" " , "")
             if len(clean_mac) != 12:
-                raise RuntimeError(f"WOL Node: Invalid MAC: {mac}")
+                raise RuntimeError(f"WOL Node: Invalid MAC address format: {mac}")
 
             is_new_send = False
             if mode == "always" or clean_mac not in WakeOnLanNode._executed_macs:
@@ -77,12 +80,12 @@ class WakeOnLanNode:
                     WakeOnLanNode._executed_macs.add(clean_mac)
                     is_new_send = True
                 except Exception as e:
-                    raise RuntimeError(f"WOL Node: Send Error {mac}: {e}")
+                    raise RuntimeError(f"WOL Node: Failed to send Magic Packet to {mac}: {e}")
 
             status_icon = "✅" if is_new_send else "ℹ️"
-            wol_results.append(f"{status_icon} {mac} (Sent)" if is_new_send else f"{status_icon} {mac} (Already Active)")
+            wol_results.append(f"{status_icon} {mac} (Sent)" if is_new_send else f"{status_icon} {mac} (Skipped - Session)")
 
-            # 2. IP Resolution (if enabled)
+            # 2. IP Resolution
             if resolve_ips == "yes":
                 ip = self.get_ip_from_mac(mac)
                 if ip:
@@ -90,9 +93,10 @@ class WakeOnLanNode:
                 else:
                     ip_results.append(f"❌ {mac} -> Not found")
 
-        # 3. Online Check
+        # 3. Online Ping Check
         online_msg = "Check disabled"
         if check_online == "yes_via_ping":
+            print(f"WOL Node: Waiting for {ip_for_ping}...")
             start_time = time.time()
             param = '-n' if platform.system().lower() == 'windows' else '-c'
             is_online = False
@@ -104,7 +108,7 @@ class WakeOnLanNode:
                 time.sleep(2)
             
             if not is_online:
-                raise RuntimeError(f"WOL Node: TIMEOUT! {ip_for_ping} not reachable.")
+                raise RuntimeError(f"WOL Node: TIMEOUT! Host {ip_for_ping} not reachable within {timeout_seconds}s.")
 
         return ("\n".join(wol_results), online_msg, "\n".join(ip_results) if ip_results else "None")
 
